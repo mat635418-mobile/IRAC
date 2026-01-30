@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 # --------------- CONFIG / CONSTANTS --------------- #
 
 APP_TITLE = "IRAC - Inventory Risk & Availability Control"
-RELEASE_VERSION = "v 0.50"
+RELEASE_VERSION = "v 0.52"
 RELEASE_DATE = "Released Feb 2026"
 
 DEFAULT_COMPANIES = [
@@ -104,11 +104,11 @@ def classify_risk(df_inventory, avg_daily, config):
 def generate_demo_data(company_id, config=None, seed=None):
     if config is None: config = DEFAULT_COMPANY_CONFIG
     
-    # Fully Random RNG
+    # Fully Random RNG (seed=None ensures it's random every click)
     rng = np.random.default_rng(seed)
 
     # Random Dimensions
-    n_materials = rng.integers(40, 120)
+    n_materials = rng.integers(50, 150)
     n_locations = rng.integers(3, 8)
 
     # Materials
@@ -172,18 +172,18 @@ def generate_demo_data(company_id, config=None, seed=None):
         mid, lid = row["material_id"], row["location_id"]
         amd = row["qty_demand"]
         
-        # Risk Logic: 15% Red, 20% Yellow, 65% Green (with some outliers)
+        # Risk Logic: 15% Red, 20% Yellow, 65% Green
         risk_roll = rng.random()
         
         if risk_roll < 0.15: # RED
             cov_days = rng.uniform(0, 2)
         elif risk_roll < 0.35: # YELLOW
             cov_days = rng.uniform(2.1, 10)
-        else: # GREEN & OUTLIERS
-            if rng.random() < 0.10:
-                cov_days = rng.uniform(120, 365) # Excess
+        else: # GREEN
+            if rng.random() < 0.10: # Outliers
+                cov_days = rng.uniform(120, 365)
             else:
-                cov_days = rng.uniform(10.1, 60) # Healthy
+                cov_days = rng.uniform(10.1, 60)
             
         qty_on_hand = int(amd/30.0 * cov_days)
         inv_rows.append({
@@ -251,6 +251,18 @@ def _get_card_css():
         }
         .lbl { font-size:11px; color:#7D98A3; font-weight:700; margin-bottom:4px; }
         .val { font-weight:700; color:#213644; font-size:15px; }
+        
+        /* Metric Box CSS */
+        .metric-container {
+            display: flex; gap: 10px; width: 100%;
+        }
+        .metric-box {
+            flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #eee; text-align: left;
+            background: white;
+        }
+        .metric-lbl { font-size: 12px; color: #666; font-weight: 600; margin-bottom: 5px; }
+        .metric-val { font-size: 28px; font-weight: 700; color: #333; line-height: 1.1; }
+        .metric-sub { font-size: 12px; margin-top: 4px; font-weight: 600; }
     </style>
     """
 
@@ -374,34 +386,30 @@ def main():
 
     # --- SIDEBAR: Data Dictionary (Pure Markdown Fix) ---
     with st.sidebar.expander("📚 Data Dictionary / Template Schema", expanded=False):
-        # Using pure Markdown to avoid HTML rendering issues
+        # Using pure Markdown to avoid HTML rendering issues and keep it clean
         st.markdown("""
-        **1. demand_history.csv**
-        * `material_id` (str)
-        * `location_id` (str)
-        * `date` (YYYY-MM-DD)
-        * `qty_demand` (float)
+<div style="font-size:13px;">
+  <b>1. demand_history.csv</b><br>
+  - material_id, location_id (str)<br>
+  - date (YYYY-MM-DD)<br>
+  - qty_demand (float)<br><br>
 
-        **2. forecast.csv**
-        * `material_id` (str)
-        * `location_id` (str)
-        * `date` (YYYY-MM-DD)
-        * `qty_forecast` (float)
+  <b>2. forecast.csv</b><br>
+  - material_id, location_id (str)<br>
+  - date (YYYY-MM-DD)<br>
+  - qty_forecast (float)<br><br>
 
-        **3. inventory_snapshot.csv**
-        * `material_id` (str)
-        * `location_id` (str)
-        * `snapshot_date` (YYYY-MM-DD)
-        * `qty_on_hand` (float)
+  <b>3. inventory_snapshot.csv</b><br>
+  - material_id, location_id (str)<br>
+  - snapshot_date (YYYY-MM-DD)<br>
+  - qty_on_hand (float)<br><br>
 
-        **4. open_supply.csv**
-        * `order_id` (str)
-        * `material_id`, `location_id`
-        * `qty_inbound` (float)
-        * `due_date` (YYYY-MM-DD)
-        
-        *Optional: materials.csv, locations.csv*
-        """)
+  <b>4. open_supply.csv</b><br>
+  - order_id, material_id, location_id (str)<br>
+  - qty_inbound (float)<br>
+  - due_date (YYYY-MM-DD)<br>
+</div>
+        """, unsafe_allow_html=True)
 
     # --- SIDEBAR: Logic Explainer ---
     with st.sidebar.expander("ℹ️ How Calculations Work", expanded=False):
@@ -493,28 +501,82 @@ def main():
         df_risk = df_risk.merge(data["locations"][["location_id", "location_name", "region"]], on="location_id", how="left")
 
     # --- METRICS SECTION (Improved) ---
-    st.markdown("### 📊 Portfolio Health")
     
-    # Calculate Counts
+    # Calculate Counts & Pct
     n_tot = len(df_risk)
-    n_red = len(df_risk[df_risk["risk_status"]=="RED"])
-    n_yel = len(df_risk[df_risk["risk_status"]=="YELLOW"])
-    n_grn = len(df_risk[df_risk["risk_status"]=="GREEN"])
-    
-    # Calculate Percentages
-    pct_red = (n_red / n_tot * 100) if n_tot > 0 else 0
-    pct_yel = (n_yel / n_tot * 100) if n_tot > 0 else 0
-    pct_grn = (n_grn / n_tot * 100) if n_tot > 0 else 0
+    if n_tot > 0:
+        counts = df_risk["risk_status"].value_counts()
+        n_red = counts.get("RED", 0)
+        n_yel = counts.get("YELLOW", 0)
+        n_grn = counts.get("GREEN", 0)
+        
+        pct_red = (n_red / n_tot) * 100
+        pct_yel = (n_yel / n_tot) * 100
+        pct_grn = (n_grn / n_tot) * 100
+    else:
+        n_red = n_yel = n_grn = 0
+        pct_red = pct_yel = pct_grn = 0.0
 
-    m1, m2, m3, m4 = st.columns(4)
+    # Layout: 70% Metrics, 30% Sunburst/Donut
+    col_kpi_left, col_kpi_right = st.columns([0.7, 0.3])
     
-    m1.metric("Total SKU-Locations", n_tot)
-    
-    # Displaying % in 'delta' but removing the arrow color logic by using delta_color='off' 
-    # or just normal strings to avoid confusion.
-    m2.metric("Critical (RED)", n_red, delta=f"{pct_red:.1f}% of Total", delta_color="inverse")
-    m3.metric("Warning (YELLOW)", n_yel, delta=f"{pct_yel:.1f}% of Total", delta_color="inverse")
-    m4.metric("Healthy (GREEN)", n_grn, delta=f"{pct_grn:.1f}% of Total", delta_color="normal")
+    with col_kpi_left:
+        st.markdown("### 📊 Portfolio Health")
+        
+        # Use custom HTML for arrow-free metrics
+        # Including CSS again to ensure it renders in this block
+        st.markdown(_get_card_css(), unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div class="metric-container">
+            <div class="metric-box">
+                <div class="metric-lbl">Total SKU-Locations</div>
+                <div class="metric-val">{n_tot}</div>
+                <div class="metric-sub" style="color:#666;">Total Active</div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-lbl">Critical (RED)</div>
+                <div class="metric-val">{n_red}</div>
+                <div class="metric-sub" style="color:#D93025;">{pct_red:.1f}% of Total</div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-lbl">Warning (YELLOW)</div>
+                <div class="metric-val">{n_yel}</div>
+                <div class="metric-sub" style="color:#F9AB00;">{pct_yel:.1f}% of Total</div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-lbl">Healthy (GREEN)</div>
+                <div class="metric-val">{n_grn}</div>
+                <div class="metric-sub" style="color:#1E8E3E;">{pct_grn:.1f}% of Total</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col_kpi_right:
+        # Altair Donut Chart (Sunburst-style representation)
+        if n_tot > 0:
+            source = df_risk["risk_status"].value_counts().reset_index()
+            source.columns = ["risk_status", "count"]
+            
+            base = alt.Chart(source).encode(
+                theta=alt.Theta("count", stack=True)
+            )
+            
+            pie = base.mark_arc(outerRadius=80, innerRadius=50).encode(
+                color=alt.Color("risk_status", legend=None, scale=alt.Scale(domain=['RED', 'YELLOW', 'GREEN'], range=['#D93025', '#F9AB00', '#1E8E3E'])),
+                order=alt.Order("risk_status", sort="descending"),
+                tooltip=["risk_status", "count"]
+            )
+            
+            text = base.mark_text(radius=100).encode(
+                text=alt.Text("count"),
+                order=alt.Order("risk_status", sort="descending"),
+                color=alt.value("black")
+            )
+            
+            st.altair_chart(pie + text, use_container_width=True)
+        else:
+            st.write("No data")
 
     # SECTION 2: RISK ANALYSIS
     st.markdown("---")
@@ -542,7 +604,7 @@ def main():
         st.subheader("Inventory Insights")
         
         if not df_view.empty:
-            # 1. NEW CHART: Inventory Value at Risk (Stacked Bar)
+            # 1. Inventory Value at Risk (Stacked Bar)
             if "total_value" in df_view.columns:
                 chart_val = alt.Chart(df_view).mark_bar().encode(
                     x=alt.X('region', title='Region'),
@@ -552,8 +614,7 @@ def main():
                 ).properties(height=220, title="Inventory Value at Risk by Region")
                 st.altair_chart(chart_val, use_container_width=True)
 
-            # 2. NEW CHART: Coverage Distribution (Histogram)
-            # Create bins for coverage to show distribution shape
+            # 2. Coverage Distribution (Histogram)
             chart_hist = alt.Chart(df_view).mark_bar().encode(
                 x=alt.X('coverage_days', bin=alt.Bin(maxbins=20), title='Coverage Days (Binned)'),
                 y=alt.Y('count()', title='Number of Items'),
