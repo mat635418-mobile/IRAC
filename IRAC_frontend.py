@@ -316,7 +316,7 @@ def generate_demo_data(
             for i in range(history_months):
                 month_end = hist_dates[i].date()
                 # Simulate 1-3 orders per month
-                n_orders = rng.integers(1, 4)
+                n_orders = int(rng.integers(1, 4))
                 for _ in range(n_orders):
                     planned = planned_lt
                     actual = int(
@@ -325,7 +325,8 @@ def generate_demo_data(
                             rng.normal(planned, planned * lt_variability),
                         )
                     )
-                    order_date = month_end - timedelta(days=actual + rng.integers(0, 10))
+                    # Cast RNG integer to Python int before using in timedelta to avoid TypeError
+                    order_date = month_end - timedelta(days=actual + int(rng.integers(0, 10)))
                     receipt_date = order_date + timedelta(days=actual)
                     lt_rows.append(
                         {
@@ -354,7 +355,7 @@ def generate_demo_data(
 
         # probability of having open supply
         if rng.random() < 0.6:
-            n_pos = rng.integers(1, 3)
+            n_pos = int(rng.integers(1, 3))
             for _ in range(n_pos):
                 qty = int(max(0, rng.normal(amd, amd * 0.3)))
                 due_in_days = rng.integers(5, 90)
