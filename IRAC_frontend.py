@@ -357,7 +357,6 @@ def main():
             unsafe_allow_html=True,
         )
     with c2:
-        # Recreating the exact visual style of the attached image
         st.markdown(
             f"""
             <div style="display:flex; gap:10px; justify-content:flex-end; align-items:center; height:100%; padding-top:10px;">
@@ -386,11 +385,51 @@ def main():
 
     st.markdown("---")
 
+    # --- SIDEBAR: Data Dictionary ---
+    with st.sidebar.expander("📚 Data Dictionary / Template Schema", expanded=False):
+        st.markdown("""
+        ### Required CSV Files
+        
+        **1. `demand_history.csv` — Historical Demand**
+        * `material_id`: material code (string)
+        * `location_id`: node / plant / warehouse (string)
+        * `date`: date of demand (e.g., `2024-01-31`)
+        * `qty_demand`: actual historical demand (numeric)
+
+        **2. `forecast.csv` — Future Demand Forecast**
+        * `material_id`: material code
+        * `location_id`: location code
+        * `date`: forecast date
+        * `qty_forecast`: forecast quantity (numeric)
+
+        **3. `inventory_snapshot.csv` — Current Stock**
+        * `material_id`: material code
+        * `location_id`: location code
+        * `snapshot_date`: date of inventory count
+        * `qty_on_hand`: current quantity (numeric)
+
+        **4. `open_supply.csv` — Inbound Orders**
+        * `order_id`: unique order ID
+        * `material_id`: material code
+        * `location_id`: destination location
+        * `qty_inbound`: quantity ordered
+        * `due_date`: expected receipt date
+        * `order_type`: e.g., `PO`
+        
+        ---
+        ### Optional Master Data
+
+        **5. `materials.csv` — Material Master**
+        * `material_id`, `material_desc`, `abc_class`
+
+        **6. `locations.csv` — Location Master**
+        * `location_id`, `location_name`, `region`
+        """)
+
     # --- SIDEBAR CONFIGURATION ---
     st.sidebar.header("Configuration")
     sel_company = st.sidebar.selectbox("Company", [c["company_id"] for c in DEFAULT_COMPANIES])
     
-    # Defaults
     config = DEFAULT_COMPANY_CONFIG.copy()
     
     st.sidebar.subheader("Planning Horizon")
@@ -410,7 +449,6 @@ def main():
     )
 
     # --- DATA LOADING SECTION ---
-    # Collapsed by default as requested
     with st.expander("🗂️ Data Setup (Demo or Upload)", expanded=False):
         
         # 1. Demo Button
@@ -434,9 +472,7 @@ def main():
             up_mat = st.file_uploader("Materials (materials.csv)", type=["csv"], key="u_mat")
             up_loc = st.file_uploader("Locations (locations.csv)", type=["csv"], key="u_loc")
 
-        # Logic: If files are uploaded, parse them and update session state
         if up_demand and up_inv:
-            # Create data dict from uploads
             manual_data = {
                 "demand": parse_uploaded_csv(up_demand),
                 "forecast": parse_uploaded_csv(up_fcst) if up_fcst else pd.DataFrame(),
@@ -446,7 +482,6 @@ def main():
                 "locations": parse_uploaded_csv(up_loc) if up_loc else pd.DataFrame(),
                 "leadtime": pd.DataFrame()
             }
-            # Only overwrite if manually triggered or if data is empty
             if st.button("Load Uploaded Files", use_container_width=True):
                 st.session_state["data"] = manual_data
                 st.success("Uploaded Data Loaded!")
@@ -458,7 +493,6 @@ def main():
 
     data = st.session_state["data"]
     
-    # Pre-processing
     df_inv = data["inventory"].copy()
     if not df_inv.empty: df_inv["snapshot_date"] = pd.to_datetime(df_inv["snapshot_date"])
     
@@ -468,7 +502,6 @@ def main():
     avg_daily = compute_avg_daily_demand(df_dem)
     df_risk = classify_risk(df_inv, avg_daily, config)
     
-    # Merge Metadata
     if not data["materials"].empty:
         df_risk = df_risk.merge(data["materials"][["material_id", "material_desc", "abc_class"]], on="material_id", how="left")
     if not data["locations"].empty:
@@ -544,7 +577,6 @@ def main():
 
     dd_hist = df_dem[(df_dem["material_id"]==s_mat) & (df_dem["location_id"]==s_loc)].copy()
     
-    # Handle Forecast (might be empty from uploads)
     if not data["forecast"].empty:
         dd_fcst = data["forecast"][(data["forecast"]["material_id"]==s_mat) & (data["forecast"]["location_id"]==s_loc)].copy()
     else:
@@ -552,7 +584,6 @@ def main():
         
     dd_inv = df_inv[(df_inv["material_id"]==s_mat) & (df_inv["location_id"]==s_loc)].copy()
     
-    # Handle Supply (might be empty)
     if not data["open_supply"].empty:
         dd_supp = data["open_supply"][(data["open_supply"]["material_id"]==s_mat) & (data["open_supply"]["location_id"]==s_loc)].copy()
     else:
