@@ -42,6 +42,7 @@ def month_range(end_date: datetime, months_back: int) -> pd.DatetimeIndex:
     return dates
 
 def gen_seasonal_demand_series(periods, base_level, seasonal_amplitude=0.3, noise_std=0.15, random_state=None):
+    # If random_state is None, it generates a new random seed
     rng = np.random.default_rng(random_state)
     t = np.arange(periods)
     seasonal = 1.0 + seasonal_amplitude * np.sin(2 * np.pi * t / 12.0)
@@ -97,8 +98,15 @@ def classify_risk(df_inventory, avg_daily, config):
 
 # --------------- DEMO DATA GENERATION --------------- #
 
-def generate_demo_data(company_id, config=None, n_materials=80, n_locations=8, seed=42):
+def generate_demo_data(company_id, config=None, n_materials=80, n_locations=8, seed=None):
+    """
+    Generates a full random dataset.
+    Changed: seed defaults to None, which forces numpy to use fresh entropy (fully random)
+    every time this function is called.
+    """
     if config is None: config = DEFAULT_COMPANY_CONFIG
+    
+    # Initialize RNG with None to ensure full randomness each run
     rng = np.random.default_rng(seed)
 
     # Materials
@@ -106,12 +114,14 @@ def generate_demo_data(company_id, config=None, n_materials=80, n_locations=8, s
     for i in range(n_materials):
         mid = f"MAT_{i:03d}"
         abc = rng.choice(["A", "B", "C"], p=[0.2, 0.5, 0.3])
+        # Randomize group to ensure variety
+        grp_idx = rng.integers(0, 10)
         materials.append({
             "company_id": company_id,
             "material_id": mid,
-            "material_desc": f"Component {mid} - {rng.choice(['Standard', 'Premium', 'Basic'])}",
+            "material_desc": f"Component {mid} - {rng.choice(['Standard', 'Premium', 'Basic', 'Custom'])}",
             "uom": "EA",
-            "material_group": f"GRP_{i % 5}",
+            "material_group": f"GRP_{grp_idx}",
             "abc_class": abc,
             "unit_price": round(rng.uniform(10, 500), 2)
         })
@@ -123,7 +133,7 @@ def generate_demo_data(company_id, config=None, n_materials=80, n_locations=8, s
         locations.append({
             "company_id": company_id,
             "location_id": lid,
-            "location_name": f"Warehouse {lid} ({rng.choice(['North', 'South', 'East', 'West'])})",
+            "location_name": f"Warehouse {lid} ({rng.choice(['North', 'South', 'East', 'West', 'Central'])})",
             "location_type": rng.choice(["PLANT", "DC"]),
             "region": f"REGION_{j % 3}",
         })
@@ -140,15 +150,16 @@ def generate_demo_data(company_id, config=None, n_materials=80, n_locations=8, s
     # Generate Demand & Forecast
     for _, m in df_materials.iterrows():
         for _, l in df_locations.iterrows():
+            # Randomize base demand significantly
             base = rng.uniform(20, 1000)
             
-            # Demand
-            d_series = gen_seasonal_demand_series(len(hist_dates), base, 0.3, 0.2, rng.integers(1,1e5))
+            # Demand - pass a random integer as seed to the sub-generator
+            d_series = gen_seasonal_demand_series(len(hist_dates), base, 0.3, 0.2, rng.integers(1, 1e9))
             for d, q in zip(hist_dates, d_series):
                 demand_rows.append({"company_id": company_id, "material_id": m["material_id"], "location_id": l["location_id"], "date": d.date(), "qty_demand": q})
             
             # Forecast
-            f_series = gen_seasonal_demand_series(len(fcst_dates), base * rng.uniform(0.9, 1.2), 0.3, 0.1, rng.integers(1,1e5))
+            f_series = gen_seasonal_demand_series(len(fcst_dates), base * rng.uniform(0.9, 1.2), 0.3, 0.1, rng.integers(1, 1e9))
             for d, q in zip(fcst_dates, f_series):
                 forecast_rows.append({"company_id": company_id, "material_id": m["material_id"], "location_id": l["location_id"], "date": d.date(), "qty_forecast": q})
 
@@ -164,7 +175,7 @@ def generate_demo_data(company_id, config=None, n_materials=80, n_locations=8, s
         mid, lid = row["material_id"], row["location_id"]
         amd = row["qty_demand"]
         
-        # Risk Bias: 30% RED, 30% YELLOW
+        # Risk Bias: 30% RED, 30% YELLOW (Still biased, but using the random rng)
         risk_roll = rng.random()
         if risk_roll < 0.30: cov_days = rng.uniform(0, 2)
         elif risk_roll < 0.60: cov_days = rng.uniform(2.1, 10)
@@ -452,11 +463,13 @@ def main():
     with st.expander("🗂️ Data Setup (Demo or Upload)", expanded=False):
         
         # 1. Demo Button
+        st.info("Click below to generate 5 fully random datasets (Demand, Forecast, Inventory, Supply, Master Data). Every click yields new data.")
         if st.button("✨ Generate & Load Demo Data", use_container_width=True):
-            with st.spinner("Generating large dataset..."):
-                data = generate_demo_data(sel_company, config)
+            with st.spinner("Generating fully random dataset..."):
+                # seed=None ensures randomness every time
+                data = generate_demo_data(sel_company, config, seed=None)
                 st.session_state["data"] = data
-                st.success("Demo Data Loaded! You can close this box.")
+                st.success("Random Demo Data Loaded!")
         
         st.markdown("---")
         st.markdown("**OR Upload Manual CSV Files**")
