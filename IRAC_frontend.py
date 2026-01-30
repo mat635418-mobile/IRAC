@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 # --------------- CONFIG / CONSTANTS --------------- #
 
 APP_TITLE = "IRAC - Inventory Risk & Availability Control"
-RELEASE_VERSION = "v 0.62"
+RELEASE_VERSION = "v 0.65"
 RELEASE_DATE = "Released Feb 2026"
 
 DEFAULT_COMPANIES = [
@@ -23,7 +23,7 @@ DEFAULT_COMPANY_CONFIG = {
     "history_months": 24,
     "forecast_months": 18,
     "planning_horizon_months": 6,
-    "service_levels": {"default": 0.95}, # 95% Service Level
+    "service_levels": {"default": 0.99}, # 99% Service Level
     "risk_thresholds": {
         "shortage_days": 2,    # Very critical
         "attention_days": 10,  # Warning zone
@@ -220,12 +220,19 @@ def generate_demo_data(company_id, config=None, seed=None):
         mid, lid = row["material_id"], row["location_id"]
         amd = row["qty_demand"]
         
+        # Risk Logic & MASSIVE Outlier Generation
         risk_roll = rng.random()
-        if risk_roll < 0.15: cov_days = rng.uniform(0, 2)
-        elif risk_roll < 0.35: cov_days = rng.uniform(2.1, 10)
-        else:
-            if rng.random() < 0.10: cov_days = rng.uniform(120, 365)
-            else: cov_days = rng.uniform(10.1, 60)
+        
+        if risk_roll < 0.15: # RED
+            cov_days = rng.uniform(0, 2)
+        elif risk_roll < 0.35: # YELLOW
+            cov_days = rng.uniform(2.1, 10)
+        else: # GREEN
+            # 15% Chance of being MASSIVE EXTREME (100 - 600 days)
+            if rng.random() < 0.15: 
+                cov_days = rng.uniform(100, 600)
+            else: 
+                cov_days = rng.uniform(10.1, 60)
             
         qty_on_hand = int(amd/30.0 * cov_days)
         inv_rows.append({
@@ -538,6 +545,22 @@ def main():
         
     if not data["locations"].empty:
         df_risk = df_risk.merge(data["locations"][["location_id", "location_name", "region"]], on="location_id", how="left")
+    
+    # Pre-calculate MRP logic
+    if not data["open_supply"].empty:
+        supply_agg = data["open_supply"].groupby(["material_id", "location_id"])["qty_inbound"].sum().reset_index()
+        df_risk = df_risk.merge(supply_agg, on=["material_id", "location_id"], how="left")
+        df_risk["qty_inbound"] = df_risk["qty_inbound"].fillna(0)
+    else:
+        df_risk["qty_inbound"] = 0
+        
+    df_risk["net_stock"] = df_risk["qty_on_hand"] + df_risk["qty_inbound"]
+    df_risk["transfer_proposal"] = np.maximum(0, df_risk["max_qty"] - df_risk["net_stock"])
+    
+    mrp_df = df_risk[
+        (df_risk["risk_status"].isin(["RED", "YELLOW"])) & 
+        (df_risk["transfer_proposal"] > 0)
+    ].copy()
 
     # --- METRICS SECTION ---
     
@@ -620,7 +643,37 @@ def main():
     if ft_abc: df_view = df_view[df_view["abc_class"].isin(ft_abc)]
     if ft_loc: df_view = df_view[df_view["region"].isin(ft_loc)]
 
-    c_risk_table, c_risk_chart = st.columns([3, 2])
+    # New Section for Obsolescence (High Coverage > 100 days)
+    st.markdown("### 🐢 Potential Obsolescence (Coverage > 100 Days)")
+    df_excess = df_view[df_view["coverage_days"] > 100].copy()
+    
+    if not df_excess.empty:
+        # Metrics for excess
+        total_excess_val = df_excess["total_value"].sum()
+        count_excess = len(df_excess)
+        
+        c_ex1, c_ex2 = st.columns([1, 2])
+        with c_ex1:
+            st.metric("Total Value at Risk", f"${total_excess_val:,.0f}")
+            st.metric("Count of Items", count_excess)
+        
+        with c_ex2:
+            st.markdown("**Top 10 Worst Offenders**")
+            st.dataframe(
+                df_excess[["material_id", "location_id", "coverage_days", "qty_on_hand", "total_value"]]
+                .sort_values("coverage_days", ascending=False)
+                .head(10)
+                .style.format({"coverage_days": "{:,.0f}", "qty_on_hand": "{:,.0f}", "total_value": "${:,.0f}"})
+                .background_gradient(subset=["coverage_days"], cmap="Reds"),
+                use_container_width=True
+            )
+    else:
+        st.success("No items with extreme overstock (> 100 days) found in current filter.")
+
+    st.markdown("---")
+    
+    # Split: Risk Cards (60%) vs Scatter Matrix (40%)
+    c_risk_table, c_risk_chart = st.columns([0.6, 0.4])
     
     with c_risk_table:
         st.subheader("Priority Action List")
@@ -629,7 +682,6 @@ def main():
     with c_risk_chart:
         st.subheader("Inventory Insights")
         if not df_view.empty:
-            # Re-added Scatter Plot (Risk Matrix)
             df_chart = df_view.copy()
             df_chart["vis_coverage"] = df_chart["coverage_days"].clip(upper=60)
             
@@ -674,7 +726,6 @@ def main():
     tab1, tab2 = st.tabs(["📉 Demand & Supply Projection", "📋 Transaction Details"])
 
     with tab1:
-        # Fetch Parameters in "Days" to apply dynamically
         item_params = df_risk[(df_risk["material_id"]==s_mat) & (df_risk["location_id"]==s_loc)].iloc[0]
         ss_days = item_params["ss_days"]
         rop_days = item_params["rop_days"]
@@ -691,36 +742,22 @@ def main():
         st.subheader("Projected Inventory Corridor (Dynamic Policy)")
         if not dd_inv.empty:
             start_stock = dd_inv.iloc[0]["qty_on_hand"]
-            
-            # Create Daily Projection DataFrame (90 Days)
             today = pd.Timestamp.today().normalize()
             dates = pd.date_range(today, periods=90, freq='D')
             proj_df = pd.DataFrame({"date": dates})
             
-            # Merge Forecast (interpolated or forward filled if strictly monthly)
-            # For robustness, we assume monthly forecast and interpolate to daily for smoother lines
-            # If dd_fcst is monthly, we resample. For demo simple logic:
             if not dd_fcst.empty:
-                # Approximate daily demand from forecast stream
-                # In real app: rigorous resampling. Here: merge nearest
-                dd_fcst_daily = dd_fcst.set_index("date").resample("D").interpolate(method="linear")
-                # Reset index
-                dd_fcst_daily = dd_fcst_daily.reset_index()
-                # Merge into proj
+                dd_fcst_daily = dd_fcst.set_index("date").resample("D").interpolate(method="linear").reset_index()
                 proj_df = proj_df.merge(dd_fcst_daily[["date", "qty_forecast"]], on="date", how="left").fillna(method="bfill").fillna(0)
             else:
                 proj_df["qty_forecast"] = 0
             
-            # Normalize forecast qty (monthly -> daily approx if forecast was monthly sum)
-            # Assuming demo generator makes monthly sums.
             proj_df["daily_demand"] = proj_df["qty_forecast"] / 30.0 
             
-            # Calculate Dynamic Corridor
             proj_df["dynamic_ss"] = proj_df["daily_demand"] * ss_days
             proj_df["dynamic_rop"] = proj_df["daily_demand"] * rop_days
             proj_df["dynamic_max"] = proj_df["daily_demand"] * max_days
 
-            # Calculate Stock Projection
             proj_df["outflow"] = proj_df["daily_demand"]
             proj_df["inflow"] = 0
             
@@ -733,16 +770,13 @@ def main():
             proj_df["net_change"] = proj_df["inflow"] - proj_df["outflow"]
             proj_df["projected_stock"] = start_stock + proj_df["net_change"].cumsum()
             
-            # Plot
             base = alt.Chart(proj_df).encode(x='date')
             
-            # Lines
             line_stock = base.mark_line(color='#0B67A4', strokeWidth=3).encode(y=alt.Y('projected_stock', title='Stock Level'))
             line_ss = base.mark_line(color='red', strokeDash=[4,4]).encode(y='dynamic_ss')
             line_rop = base.mark_line(color='orange', strokeDash=[4,4]).encode(y='dynamic_rop')
             line_max = base.mark_line(color='green', strokeDash=[4,4]).encode(y='dynamic_max')
             
-            # Labels (using max date to put label at end)
             st.altair_chart((line_stock + line_ss + line_rop + line_max).interactive(), use_container_width=True)
             st.caption("Red: Safety Stock | Orange: ROP | Green: Max Stock (Dynamic based on forecasted demand)")
 
@@ -754,6 +788,32 @@ def main():
         with c_supp:
             st.subheader("Inbound Supply Orders")
             render_supply_cards(dd_supp)
+
+    # --- SECTION 4: MRP ---
+    st.markdown("---")
+    st.header("4. MRP & Replenishment Proposal")
+    
+    if not mrp_df.empty:
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            st.markdown("##### 🚀 Proposed Stock Transfers (To restore corridor health)")
+            st.dataframe(
+                mrp_df[["material_id", "location_id", "risk_status", "qty_on_hand", "qty_inbound", "max_qty", "transfer_proposal"]]
+                .sort_values("transfer_proposal", ascending=False)
+                .style.format({"qty_on_hand": "{:,.0f}", "transfer_proposal": "{:,.0f}"})
+                .background_gradient(subset=["transfer_proposal"], cmap="Greens"),
+                use_container_width=True
+            )
+        with c2:
+            st.markdown("##### Proposal by Location")
+            bar_chart = alt.Chart(mrp_df).mark_bar().encode(
+                x=alt.X('location_id', title=None),
+                y=alt.Y('sum(transfer_proposal)', title='Total Qty'),
+                color='location_id'
+            )
+            st.altair_chart(bar_chart, use_container_width=True)
+    else:
+        st.success("No urgent replenishment needed! All Red/Yellow items have sufficient inbound supply.")
 
 if __name__ == "__main__":
     main()
