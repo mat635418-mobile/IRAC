@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 # --------------- CONFIG / CONSTANTS --------------- #
 
 APP_TITLE = "IRAC - Inventory Risk & Availability Control"
-RELEASE_VERSION = "v 0.52"
+RELEASE_VERSION = "v 0.55"
 RELEASE_DATE = "Released Feb 2026"
 
 DEFAULT_COMPANIES = [
@@ -253,12 +253,18 @@ def _get_card_css():
         .val { font-weight:700; color:#213644; font-size:15px; }
         
         /* Metric Box CSS */
-        .metric-container {
-            display: flex; gap: 10px; width: 100%;
+        .metric-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr; /* Two equal columns */
+            gap: 12px;
         }
         .metric-box {
-            flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #eee; text-align: left;
+            padding: 15px; 
+            border-radius: 8px; 
+            border: 1px solid #eee; 
+            text-align: left;
             background: white;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
         }
         .metric-lbl { font-size: 12px; color: #666; font-weight: 600; margin-bottom: 5px; }
         .metric-val { font-size: 28px; font-weight: 700; color: #333; line-height: 1.1; }
@@ -384,9 +390,8 @@ def main():
 
     st.markdown("---")
 
-    # --- SIDEBAR: Data Dictionary (Pure Markdown Fix) ---
+    # --- SIDEBAR: Data Dictionary ---
     with st.sidebar.expander("📚 Data Dictionary / Template Schema", expanded=False):
-        # Using pure Markdown to avoid HTML rendering issues and keep it clean
         st.markdown("""
 <div style="font-size:13px;">
   <b>1. demand_history.csv</b><br>
@@ -500,7 +505,7 @@ def main():
     if not data["locations"].empty:
         df_risk = df_risk.merge(data["locations"][["location_id", "location_name", "region"]], on="location_id", how="left")
 
-    # --- METRICS SECTION (Improved) ---
+    # --- METRICS SECTION (50/50 Split) ---
     
     # Calculate Counts & Pct
     n_tot = len(df_risk)
@@ -517,27 +522,29 @@ def main():
         n_red = n_yel = n_grn = 0
         pct_red = pct_yel = pct_grn = 0.0
 
-    # Layout: 70% Metrics, 30% Sunburst/Donut
-    col_kpi_left, col_kpi_right = st.columns([0.7, 0.3])
+    st.markdown("### 📊 Portfolio Health")
+    
+    # Split 50% Left (Cards), 50% Right (Graph)
+    col_kpi_left, col_kpi_right = st.columns(2)
     
     with col_kpi_left:
-        st.markdown("### 📊 Portfolio Health")
-        
-        # Use custom HTML for arrow-free metrics
-        # Including CSS again to ensure it renders in this block
+        # Include CSS again to ensure it renders in this block
         st.markdown(_get_card_css(), unsafe_allow_html=True)
         
+        # 2x2 Grid Layout
+        # Top Row: Total | Healthy (Green)
+        # Bottom Row: Warning (Yellow) | Critical (Red)
         st.markdown(f"""
-        <div class="metric-container">
+        <div class="metric-grid">
             <div class="metric-box">
                 <div class="metric-lbl">Total SKU-Locations</div>
                 <div class="metric-val">{n_tot}</div>
                 <div class="metric-sub" style="color:#666;">Total Active</div>
             </div>
             <div class="metric-box">
-                <div class="metric-lbl">Critical (RED)</div>
-                <div class="metric-val">{n_red}</div>
-                <div class="metric-sub" style="color:#D93025;">{pct_red:.1f}% of Total</div>
+                <div class="metric-lbl">Healthy (GREEN)</div>
+                <div class="metric-val">{n_grn}</div>
+                <div class="metric-sub" style="color:#1E8E3E;">{pct_grn:.1f}% of Total</div>
             </div>
             <div class="metric-box">
                 <div class="metric-lbl">Warning (YELLOW)</div>
@@ -545,15 +552,15 @@ def main():
                 <div class="metric-sub" style="color:#F9AB00;">{pct_yel:.1f}% of Total</div>
             </div>
             <div class="metric-box">
-                <div class="metric-lbl">Healthy (GREEN)</div>
-                <div class="metric-val">{n_grn}</div>
-                <div class="metric-sub" style="color:#1E8E3E;">{pct_grn:.1f}% of Total</div>
+                <div class="metric-lbl">Critical (RED)</div>
+                <div class="metric-val">{n_red}</div>
+                <div class="metric-sub" style="color:#D93025;">{pct_red:.1f}% of Total</div>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
     with col_kpi_right:
-        # Altair Donut Chart (Sunburst-style representation)
+        # Altair Donut Chart - Increased Size for 50% width
         if n_tot > 0:
             source = df_risk["risk_status"].value_counts().reset_index()
             source.columns = ["risk_status", "count"]
@@ -562,13 +569,14 @@ def main():
                 theta=alt.Theta("count", stack=True)
             )
             
-            pie = base.mark_arc(outerRadius=80, innerRadius=50).encode(
+            # Increased radius for larger visibility
+            pie = base.mark_arc(outerRadius=120, innerRadius=80).encode(
                 color=alt.Color("risk_status", legend=None, scale=alt.Scale(domain=['RED', 'YELLOW', 'GREEN'], range=['#D93025', '#F9AB00', '#1E8E3E'])),
                 order=alt.Order("risk_status", sort="descending"),
                 tooltip=["risk_status", "count"]
             )
             
-            text = base.mark_text(radius=100).encode(
+            text = base.mark_text(radius=140).encode(
                 text=alt.Text("count"),
                 order=alt.Order("risk_status", sort="descending"),
                 color=alt.value("black")
