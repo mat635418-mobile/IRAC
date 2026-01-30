@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 APP_TITLE = "IRAC - Inventory Risk & Availability Control"
 # UI release metadata (displayed next to the title)
-RELEASE_VERSION = "v 0.35"
+RELEASE_VERSION = "v 0.36"
 RELEASE_DATE = "Released Jan 2026"
 
 DEFAULT_COMPANIES = [
@@ -20,7 +20,7 @@ DEFAULT_COMPANIES = [
 
 # Default config used for generated demo data and as a fallback
 DEFAULT_COMPANY_CONFIG = {
-    "time_bucket": "month",           # "week" or "month"
+    "time_bucket": "month",            # "week" or "month"
     "history_months": 24,
     "forecast_months": 18,
     "planning_horizon_months": 6,
@@ -424,6 +424,8 @@ def render_risk_cards(df_view, df_forecast):
     """
     Render all cards together to avoid multiple iframes and large gaps.
     Uses a single components.html(...) call to embed the combined HTML.
+    
+    FIX: Injected CSS style block to ensure iframe font matches Streamlit app.
     """
     if df_view.empty:
         st.info("No rows to display.")
@@ -521,12 +523,25 @@ def render_risk_cards(df_view, df_forecast):
         """
         cards.append(textwrap.dedent(card_html).strip())
 
-    # Combine all cards into one container
+    # CSS to inject into the iframe so fonts match Streamlit (Source Sans Pro / System UI)
+    style_block = """
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@400;600;700;800&display=swap');
+        body {
+            font-family: "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            margin: 0;
+            color: #31333F;
+        }
+    </style>
+    """
+
+    # Combine all cards into one container with the style block at the top
     combined_html = """
+    {style}
     <div style="width:100%; box-sizing:border-box; padding:6px 10px;">
       {cards}
     </div>
-    """.format(cards="\n".join(cards))
+    """.format(style=style_block, cards="\n".join(cards))
 
     combined_html = textwrap.dedent(combined_html).strip()
 
