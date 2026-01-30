@@ -50,14 +50,9 @@ def gen_seasonal_demand_series(periods, base_level, seasonal_amplitude=0.3, nois
     series = np.clip(series, a_min=0, a_max=None)
     return series.round().astype(int)
 
-def to_csv_bytes(df: pd.DataFrame) -> bytes:
-    buf = io.StringIO()
-    df.to_csv(buf, index=False)
-    return buf.getvalue().encode("utf-8")
-
 def parse_uploaded_csv(uploaded_file) -> pd.DataFrame:
     if uploaded_file is None:
-        return None
+        return pd.DataFrame()
     return pd.read_csv(uploaded_file)
 
 def compute_avg_daily_demand(df_demand: pd.DataFrame) -> pd.DataFrame:
@@ -103,9 +98,6 @@ def classify_risk(df_inventory, avg_daily, config):
 # --------------- DEMO DATA GENERATION --------------- #
 
 def generate_demo_data(company_id, config=None, n_materials=80, n_locations=8, seed=42):
-    """
-    Scaled up generation with biased risk distribution.
-    """
     if config is None: config = DEFAULT_COMPANY_CONFIG
     rng = np.random.default_rng(seed)
 
@@ -163,7 +155,7 @@ def generate_demo_data(company_id, config=None, n_materials=80, n_locations=8, s
     df_demand = pd.DataFrame(demand_rows)
     df_forecast = pd.DataFrame(forecast_rows)
 
-    # Inventory Snapshot - BIAS FOR RISK
+    # Inventory Snapshot
     inv_rows = []
     snapshot_date = today
     avg_dem = df_demand.groupby(["material_id", "location_id"])["qty_demand"].mean().reset_index()
@@ -172,21 +164,13 @@ def generate_demo_data(company_id, config=None, n_materials=80, n_locations=8, s
         mid, lid = row["material_id"], row["location_id"]
         amd = row["qty_demand"]
         
-        # Risk Bias Logic:
-        # 30% Critical (Red) -> 0 to 2 days coverage
-        # 30% Warning (Yellow) -> 3 to 10 days coverage
-        # 40% Healthy (Green) -> > 10 days coverage
+        # Risk Bias: 30% RED, 30% YELLOW
         risk_roll = rng.random()
-        
-        if risk_roll < 0.30: # RED
-            cov_days = rng.uniform(0, 2)
-        elif risk_roll < 0.60: # YELLOW
-            cov_days = rng.uniform(2.1, 10)
-        else: # GREEN
-            cov_days = rng.uniform(10.1, 60)
+        if risk_roll < 0.30: cov_days = rng.uniform(0, 2)
+        elif risk_roll < 0.60: cov_days = rng.uniform(2.1, 10)
+        else: cov_days = rng.uniform(10.1, 60)
             
-        qty_on_hand = int(amd/30.0 * cov_days) # approx daily conversion
-        
+        qty_on_hand = int(amd/30.0 * cov_days)
         inv_rows.append({
             "company_id": company_id,
             "snapshot_date": snapshot_date,
@@ -197,12 +181,10 @@ def generate_demo_data(company_id, config=None, n_materials=80, n_locations=8, s
 
     df_inventory = pd.DataFrame(inv_rows)
     
-    # Lead Time & Supply
-    # (Simplified for brevity, just generating Supply Orders)
+    # Supply Orders
     po_rows = []
     po_cnt = 1
     for _, inv in df_inventory.iterrows():
-        # High probability of open orders for low stock items
         has_po = False
         if inv["qty_on_hand"] < 100: has_po = rng.random() < 0.9
         else: has_po = rng.random() < 0.4
@@ -211,7 +193,6 @@ def generate_demo_data(company_id, config=None, n_materials=80, n_locations=8, s
             n = rng.integers(1, 4)
             for _ in range(n):
                 qty = rng.integers(50, 500)
-                # Due dates: some late (negative), some soon
                 days_due = rng.integers(-5, 45) 
                 po_rows.append({
                     "company_id": company_id,
@@ -235,7 +216,6 @@ def generate_demo_data(company_id, config=None, n_materials=80, n_locations=8, s
 # --------------- UI HELPERS --------------- #
 
 def _fmt(x):
-    """Format numeric values with thousands separator."""
     try:
         val = int(round(float(x)))
         return f"{val:,}".replace(",", ".")
@@ -265,13 +245,11 @@ def render_risk_cards(df_view):
         return
 
     cards_html = [_get_card_css()]
-    
-    # Limit display to avoid browser crash on huge demo data
     max_display = 100
     display_df = df_view.sort_values(["coverage_days", "avg_daily_demand"], ascending=[True, False]).head(max_display)
     
     for _, row in display_df.iterrows():
-        bg = "#F3FFF6" # Green
+        bg = "#F3FFF6"
         if row["risk_status"] == "YELLOW": bg = "#FFFBEA"
         if row["risk_status"] == "RED": bg = "#FFF4F4"
 
@@ -309,7 +287,6 @@ def render_supply_cards(df_supply):
         
     cards_html = [_get_card_css()]
     for _, row in df_supply.sort_values("due_date").iterrows():
-        # Late?
         is_late = pd.to_datetime(row['due_date']) < datetime.now()
         bg = "#FFF4F4" if is_late else "#F9F9F9"
         
@@ -339,9 +316,7 @@ def render_supply_cards(df_supply):
 
 def render_inventory_card(row_inv):
     if row_inv.empty: return
-    # Assuming row_inv is a Series or single row DF
     if isinstance(row_inv, pd.DataFrame): row_inv = row_inv.iloc[0]
-    
     css = _get_card_css()
     html = f"""
     {css}
@@ -367,44 +342,137 @@ def render_inventory_card(row_inv):
 def main():
     st.set_page_config(page_title=APP_TITLE, layout="wide")
     
-    # HEADER
-    c1, c2 = st.columns([3, 1])
-    c1.title(f"📦 {APP_TITLE}")
-    c2.markdown(f"**{RELEASE_VERSION}** | {RELEASE_DATE}")
+    # --- HEADER with Custom CSS Badges ---
+    c1, c2 = st.columns([8, 3])
+    with c1:
+        st.markdown(
+            f"""
+            <div style="display:flex; align-items:center; gap:12px;">
+                <div style="font-size:44px; line-height:1;">📦</div>
+                <div>
+                    <h1 style="margin:0; font-size:30px; color:#0F2933;">{APP_TITLE}</h1>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with c2:
+        # Recreating the exact visual style of the attached image
+        st.markdown(
+            f"""
+            <div style="display:flex; gap:10px; justify-content:flex-end; align-items:center; height:100%; padding-top:10px;">
+                <span style="
+                    background-color: #E6F2FF;
+                    color: #0056b3;
+                    padding: 6px 12px;
+                    border-radius: 16px;
+                    font-weight: 600;
+                    font-family: 'Source Sans Pro', sans-serif;
+                    font-size: 14px;
+                ">{RELEASE_VERSION}</span>
+                <span style="
+                    background-color: #F3E5F5;
+                    color: #6A1B9A;
+                    padding: 6px 12px;
+                    border-radius: 16px;
+                    font-weight: 600;
+                    font-family: 'Source Sans Pro', sans-serif;
+                    font-size: 14px;
+                ">{RELEASE_DATE}</span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
     st.markdown("---")
 
-    # SIDEBAR
+    # --- SIDEBAR CONFIGURATION ---
     st.sidebar.header("Configuration")
     sel_company = st.sidebar.selectbox("Company", [c["company_id"] for c in DEFAULT_COMPANIES])
+    
+    # Defaults
     config = DEFAULT_COMPANY_CONFIG.copy()
     
-    # DATA LOADING
-    st.header("1. Data Loading")
-    col_btn, col_txt = st.columns([1, 4])
-    if col_btn.button("Generate & Load Demo Data"):
-        with st.spinner("Generating large dataset..."):
-            data = generate_demo_data(sel_company, config)
-            st.session_state["data"] = data
-            st.success("Data Loaded!")
-    
+    st.sidebar.subheader("Planning Horizon")
+    config["planning_horizon_months"] = st.sidebar.slider(
+        "Months to Plan", min_value=1, max_value=24, value=6
+    )
+
+    st.sidebar.subheader("Risk Thresholds (Days)")
+    config["risk_thresholds"]["shortage_days"] = st.sidebar.number_input(
+        "Critical Shortage (RED)", min_value=0, max_value=20, value=2
+    )
+    config["risk_thresholds"]["attention_days"] = st.sidebar.number_input(
+        "Attention (YELLOW)", min_value=1, max_value=60, value=10
+    )
+    config["risk_thresholds"]["excess_days"] = st.sidebar.number_input(
+        "Excess Stock", min_value=30, max_value=365, value=90
+    )
+
+    # --- DATA LOADING SECTION ---
+    # Collapsed by default as requested
+    with st.expander("🗂️ Data Setup (Demo or Upload)", expanded=False):
+        
+        # 1. Demo Button
+        if st.button("✨ Generate & Load Demo Data", use_container_width=True):
+            with st.spinner("Generating large dataset..."):
+                data = generate_demo_data(sel_company, config)
+                st.session_state["data"] = data
+                st.success("Demo Data Loaded! You can close this box.")
+        
+        st.markdown("---")
+        st.markdown("**OR Upload Manual CSV Files**")
+        
+        # 2. Manual Uploaders
+        col_up1, col_up2 = st.columns(2)
+        with col_up1:
+            up_demand = st.file_uploader("Demand (demand_history.csv)", type=["csv"], key="u_dem")
+            up_fcst = st.file_uploader("Forecast (forecast.csv)", type=["csv"], key="u_fcst")
+            up_inv = st.file_uploader("Inventory (inventory_snapshot.csv)", type=["csv"], key="u_inv")
+        with col_up2:
+            up_supp = st.file_uploader("Open Supply (open_supply.csv)", type=["csv"], key="u_sup")
+            up_mat = st.file_uploader("Materials (materials.csv)", type=["csv"], key="u_mat")
+            up_loc = st.file_uploader("Locations (locations.csv)", type=["csv"], key="u_loc")
+
+        # Logic: If files are uploaded, parse them and update session state
+        if up_demand and up_inv:
+            # Create data dict from uploads
+            manual_data = {
+                "demand": parse_uploaded_csv(up_demand),
+                "forecast": parse_uploaded_csv(up_fcst) if up_fcst else pd.DataFrame(),
+                "inventory": parse_uploaded_csv(up_inv),
+                "open_supply": parse_uploaded_csv(up_supp) if up_supp else pd.DataFrame(),
+                "materials": parse_uploaded_csv(up_mat) if up_mat else pd.DataFrame(),
+                "locations": parse_uploaded_csv(up_loc) if up_loc else pd.DataFrame(),
+                "leadtime": pd.DataFrame()
+            }
+            # Only overwrite if manually triggered or if data is empty
+            if st.button("Load Uploaded Files", use_container_width=True):
+                st.session_state["data"] = manual_data
+                st.success("Uploaded Data Loaded!")
+
+    # --- APP LOGIC ---
     if "data" not in st.session_state:
-        st.info("Please click the button above to load data.")
+        st.info("Please expand the 'Data Setup' box above to Load Demo Data or Upload your files.")
         return
 
     data = st.session_state["data"]
     
-    # PRE-PROCESSING
+    # Pre-processing
     df_inv = data["inventory"].copy()
-    df_inv["snapshot_date"] = pd.to_datetime(df_inv["snapshot_date"])
+    if not df_inv.empty: df_inv["snapshot_date"] = pd.to_datetime(df_inv["snapshot_date"])
+    
     df_dem = data["demand"].copy()
-    df_dem["date"] = pd.to_datetime(df_dem["date"])
+    if not df_dem.empty: df_dem["date"] = pd.to_datetime(df_dem["date"])
     
     avg_daily = compute_avg_daily_demand(df_dem)
     df_risk = classify_risk(df_inv, avg_daily, config)
     
     # Merge Metadata
-    df_risk = df_risk.merge(data["materials"][["material_id", "material_desc", "abc_class"]], on="material_id", how="left")
-    df_risk = df_risk.merge(data["locations"][["location_id", "location_name", "region"]], on="location_id", how="left")
+    if not data["materials"].empty:
+        df_risk = df_risk.merge(data["materials"][["material_id", "material_desc", "abc_class"]], on="material_id", how="left")
+    if not data["locations"].empty:
+        df_risk = df_risk.merge(data["locations"][["location_id", "location_name", "region"]], on="location_id", how="left")
 
     # METRICS
     st.markdown("### 📊 High-Level KPIs")
@@ -414,9 +482,10 @@ def main():
     n_tot = len(df_risk)
     
     m1.metric("Total SKU-Locations", n_tot)
-    m2.metric("Critical Shortages (RED)", n_red, delta=f"{n_red/n_tot:.1%}", delta_color="inverse")
-    m3.metric("Low Coverage (YELLOW)", n_yel, delta=f"{n_yel/n_tot:.1%}", delta_color="inverse")
-    m4.metric("Avg Coverage", f"{df_risk['coverage_days'].replace([np.inf, -np.inf], np.nan).median():.1f} days")
+    m2.metric("Critical Shortages (RED)", n_red, delta=f"{n_red/n_tot:.1%}" if n_tot else "0%", delta_color="inverse")
+    m3.metric("Low Coverage (YELLOW)", n_yel, delta=f"{n_yel/n_tot:.1%}" if n_tot else "0%", delta_color="inverse")
+    med_cov = df_risk['coverage_days'].replace([np.inf, -np.inf], np.nan).median()
+    m4.metric("Avg Coverage", f"{med_cov:.1f} days" if pd.notnull(med_cov) else "-")
 
     # SECTION 2: RISK
     st.markdown("---")
@@ -424,8 +493,12 @@ def main():
     
     f1, f2, f3 = st.columns(3)
     ft_risk = f1.multiselect("Filter Status", ["RED", "YELLOW", "GREEN"], default=["RED", "YELLOW"])
-    ft_abc = f2.multiselect("Filter ABC", ["A", "B", "C"])
-    ft_loc = f3.multiselect("Filter Region", sorted(df_risk["region"].dropna().unique()))
+    
+    abc_opts = sorted(df_risk["abc_class"].dropna().unique()) if "abc_class" in df_risk else []
+    ft_abc = f2.multiselect("Filter ABC", abc_opts)
+    
+    reg_opts = sorted(df_risk["region"].dropna().unique()) if "region" in df_risk else []
+    ft_loc = f3.multiselect("Filter Region", reg_opts)
 
     df_view = df_risk.copy()
     if ft_risk: df_view = df_view[df_view["risk_status"].isin(ft_risk)]
@@ -439,95 +512,93 @@ def main():
         render_risk_cards(df_view)
 
     with c_risk_chart:
-        st.subheader("Risk Matrix (Demand vs Coverage)")
-        # Scatter Plot: X=AvgDailyDemand, Y=Coverage, Color=Risk
-        # We clamp coverage to 60 days for visualization so charts don't squash
+        st.subheader("Risk Matrix")
         df_chart = df_view.copy()
         df_chart["vis_coverage"] = df_chart["coverage_days"].clip(upper=60)
         
-        chart = alt.Chart(df_chart).mark_circle(size=80).encode(
-            x=alt.X('avg_daily_demand', title='Avg Daily Demand'),
-            y=alt.Y('vis_coverage', title='Coverage (Days) [Capped at 60]'),
-            color=alt.Color('risk_status', scale=alt.Scale(domain=['RED', 'YELLOW', 'GREEN'], range=['#D93025', '#F9AB00', '#1E8E3E'])),
-            tooltip=['material_id', 'location_id', 'coverage_days', 'avg_daily_demand']
-        ).interactive()
-        st.altair_chart(chart, use_container_width=True)
+        if not df_chart.empty:
+            chart = alt.Chart(df_chart).mark_circle(size=80).encode(
+                x=alt.X('avg_daily_demand', title='Avg Daily Demand'),
+                y=alt.Y('vis_coverage', title='Coverage (Days)'),
+                color=alt.Color('risk_status', scale=alt.Scale(domain=['RED', 'YELLOW', 'GREEN'], range=['#D93025', '#F9AB00', '#1E8E3E'])),
+                tooltip=['material_id', 'location_id', 'coverage_days', 'avg_daily_demand']
+            ).interactive()
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            st.info("No data for chart.")
 
     # SECTION 3: DRILLDOWN
     st.markdown("---")
     st.header("3. Detailed Planning View")
     
+    if df_risk.empty:
+        st.warning("No data available.")
+        return
+
     col_sel1, col_sel2 = st.columns(2)
     with col_sel1:
         s_mat = st.selectbox("Select Material", sorted(df_risk["material_id"].unique()))
     with col_sel2:
-        # Filter locations valid for this material
         valid_locs = df_risk[df_risk["material_id"] == s_mat]["location_id"].unique()
         s_loc = st.selectbox("Select Location", sorted(valid_locs))
 
-    # PREPARE DRILLDOWN DATA
     dd_hist = df_dem[(df_dem["material_id"]==s_mat) & (df_dem["location_id"]==s_loc)].copy()
-    dd_fcst = data["forecast"][(data["forecast"]["material_id"]==s_mat) & (data["forecast"]["location_id"]==s_loc)].copy()
+    
+    # Handle Forecast (might be empty from uploads)
+    if not data["forecast"].empty:
+        dd_fcst = data["forecast"][(data["forecast"]["material_id"]==s_mat) & (data["forecast"]["location_id"]==s_loc)].copy()
+    else:
+        dd_fcst = pd.DataFrame()
+        
     dd_inv = df_inv[(df_inv["material_id"]==s_mat) & (df_inv["location_id"]==s_loc)].copy()
-    dd_supp = data["open_supply"][(data["open_supply"]["material_id"]==s_mat) & (data["open_supply"]["location_id"]==s_loc)].copy()
+    
+    # Handle Supply (might be empty)
+    if not data["open_supply"].empty:
+        dd_supp = data["open_supply"][(data["open_supply"]["material_id"]==s_mat) & (data["open_supply"]["location_id"]==s_loc)].copy()
+    else:
+        dd_supp = pd.DataFrame()
 
-    # LAYOUT: Top = Charts, Bottom = Card Tables
     tab1, tab2 = st.tabs(["📉 Demand & Supply Projection", "📋 Transaction Details"])
 
     with tab1:
-        # 1. Demand vs Forecast Chart (Altair)
-        c_hist = alt.Chart(dd_hist).mark_line(color='gray').encode(
-            x='date', y='qty_demand', tooltip=['date', 'qty_demand']
-        )
-        c_fcst = alt.Chart(dd_fcst).mark_line(strokeDash=[5,5], color='blue').encode(
-            x='date', y='qty_forecast', tooltip=['date', 'qty_forecast']
-        )
+        # 1. Demand vs Forecast
+        base = alt.Chart(dd_hist).mark_line(color='gray').encode(x='date', y='qty_demand', tooltip=['date', 'qty_demand'])
+        if not dd_fcst.empty:
+            dd_fcst["date"] = pd.to_datetime(dd_fcst["date"])
+            line_f = alt.Chart(dd_fcst).mark_line(strokeDash=[5,5], color='blue').encode(x='date', y='qty_forecast', tooltip=['date', 'qty_forecast'])
+            st.altair_chart((base + line_f).interactive(), use_container_width=True)
+        else:
+            st.altair_chart(base.interactive(), use_container_width=True)
         
-        st.subheader("Demand History vs Forecast")
-        st.altair_chart((c_hist + c_fcst).interactive(), use_container_width=True)
-        
-        # 2. Projected Inventory Balance (NEW VISUAL)
+        # 2. Projected Balance
         st.subheader("Projected Inventory Balance (90 Days)")
-        
-        # Simple daily projection logic
         if not dd_inv.empty:
             start_stock = dd_inv.iloc[0]["qty_on_hand"]
             avg_daily_fcst = dd_fcst["qty_forecast"].mean() / 30.0 if not dd_fcst.empty else 0
             
-            # Create 90 day range
             today = pd.Timestamp.today().normalize()
             dates = pd.date_range(today, periods=90, freq='D')
             proj_df = pd.DataFrame({"date": dates})
-            
-            # 1. Outflow (Forecast)
             proj_df["outflow"] = avg_daily_fcst
-            
-            # 2. Inflow (Supply)
             proj_df["inflow"] = 0
+            
             if not dd_supp.empty:
                 supp_agg = dd_supp.groupby("due_date")["qty_inbound"].sum().reset_index()
                 supp_agg["due_date"] = pd.to_datetime(supp_agg["due_date"])
                 proj_df = proj_df.merge(supp_agg, left_on="date", right_on="due_date", how="left").fillna(0)
                 proj_df["inflow"] = proj_df["qty_inbound"]
             
-            # 3. CumSum
             proj_df["net_change"] = proj_df["inflow"] - proj_df["outflow"]
             proj_df["projected_stock"] = start_stock + proj_df["net_change"].cumsum()
             
-            # 4. Chart with Threshold Zones
-            # Define safety stock line (e.g., 10 days of demand)
             ss_level = avg_daily_fcst * 10
             
             base = alt.Chart(proj_df).encode(x='date')
             line = base.mark_line(color='#0B67A4').encode(y=alt.Y('projected_stock', title='Projected Stock'))
-            
-            # Red zone area (below 0)
             rule0 = base.mark_rule(color='red', strokeWidth=2).encode(y=alt.datum(0))
-            # SS Rule
             ruless = base.mark_rule(color='orange', strokeDash=[3,3]).encode(y=alt.datum(ss_level))
             
             st.altair_chart((line + rule0 + ruless).interactive(), use_container_width=True)
-            st.caption("Blue: Projected Stock | Orange Dashed: Estimated Safety Stock (10 days) | Red: Stockout")
 
     with tab2:
         c_inv, c_supp = st.columns(2)
